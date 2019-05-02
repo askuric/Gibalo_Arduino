@@ -21,21 +21,31 @@
 #define Gyro_Gain 0.03048
 #define Gyro_Scaled(x) x*Gyro_Gain //Return the scaled gyro raw data in degrees per second
 
-#define RAD2GRAD 57.2957795
-#define GRAD2RAD 0.01745329251994329576923690768489
-
+// pin set/reset macros
 #define CLR(x,y) (x&=(~(1<<y)))
 #define SET(x,y) (x|=(1<<y))
 
+// Constraint constants
 #define ZERO_SPEED 65535
 #define MAX_THROTTLE 1000
 #define MAX_VELOCITY_LIN 1
 #define MAX_STEERING 60
 #define MAX_ACCEL_LIN 70.0  
 #define MAX_VELOCITY 20.0*pi
-
 #define MAX_ACCEL 100 // maximal delta Throttle
 
+// Different sensor offset for different devices
+#ifdef GIBALO_V2_0
+  #define ZERO_ANGLE -1.5
+#elif defined GIBALO_V2_1
+  #define ZERO_ANGLE 4.8 
+#else
+  #define ZERO_ANGLE 0
+#endif
+
+// Transfomation constants
+#define RAD2GRAD 57.2957795
+#define GRAD2RAD 0.01745329251994329576923690768489
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
@@ -46,28 +56,22 @@ uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[18]; // FIFO storage buffer
 Quaternion q;
 
-
+// Synchonising variables
 long timer_old;
 long timer_value;
 float dt;
 
+
+// ON OFF system state
 #define ON 1
 #define OFF 0
-// ON OFF constant
 int state = ON;
 
 // class default I2C address is 0x68
 MPU6050 mpu;
 
+// gibalo states
 float angle_adjusted;
-
-#ifdef GIBALO_V2_0
-  #define ZERO_ANGLE -1.5
-#elif defined GIBALO_V2_1
-  #define ZERO_ANGLE 4.8 
-#else
-  #define ZERO_ANGLE 0
-#endif
 float throttle;
 float steering;
 float target_speed[2];
@@ -125,13 +129,12 @@ uint8_t period_m_index[2];    // index for subperiods
 #define MR 1  // rigth motor ID
  
 
-// Regulacijske varijable i konstante
+// Control constants
 #define k 2
 #define pi  3.14159265359
 #define Ts 5
 #define Ta 0.008
-
-// variable stanja
+// controller state variables
 double dx[3] = {0};
 double d_x[3]  = {0};
 double e[3] = {0};
@@ -142,7 +145,7 @@ double N = 0;
 double R = 0.043;
 double theta[3] = {0};
 double x[k]={0};
-
+// step counter of each motor
 long count_xl = 0; 
 long count_xr = 0;
 
@@ -181,28 +184,28 @@ float dmpGetPhi() {
 
 /**
  *
- * Funkcija koja ostvaruje PD regulator
+ * PD controller function
  *
- * @param  (float) T - vrijeme uzorkovanja
- * @param  (float) inoput - nagib segway-a
- * @param  (float) setPoint - referenca nagiba
- * @param  (float) Kp, Ti, Td - Koeficienti PID regulatoar
+ * @param  (float) T - sampling time
+ * @param  (float) input - gibalo angle
+ * @param  (float) setPoint - angle set point
  *
  * @return (float) N - skalirana upravljačka veličina
  */
 float anglePDControl(float T, float input, float setPoint)
 {
   static float e_k, e_k1, a_k1;
+  // PDf constants - MATLAB calculated
   float Kp = -23.5, Td = 0.122, N = 40.5;
   float Tf = Td/N;
   
-  // greska regualcije
+  // control error
   e_k = setPoint - input;
   
-  // izracunavanje akceleracije kao urpavljačke veličine
-  // primitivan PD
+  // acceleration calculation
+  // primitive PD implementation
   //a[k] =  Kp *e[k] + Kd * (e[k] - e[k-1])/T;
-  // PDF
+  // PDf implementation
   float a_k = 1/(T+Tf)*(Tf*a_k1 + Kp*(Td+Tf+T)*e_k - Kp*(Tf+Td)*e_k1);
   
   e_k1=e_k;
@@ -210,7 +213,7 @@ float anglePDControl(float T, float input, float setPoint)
   return a_k;
 }
 
-// P control implementation.
+// P controller implementation.
 float speedPControl(float input, float setPoint)
 {
   static float e_k;
@@ -225,25 +228,8 @@ float speedPControl(float input, float setPoint)
 }
 
 /**
-  Motor2 PI velocity regulator
-  PI controller constants are defined in the "motor.h"
-*/
-float anglePIControl(float dT, float input, float setPoint){
-
-  static float e_k, e_k1, a_k1;
-  float Kp = -25.2, Ti = 0.358; 
-  // controller error
-  e_k = setPoint - input;
-  
-  // PI equation
-  float a_k = a_k1 + Kp*(dT/(2*Ti)+1)*e_k + Kp*(dT/(2*Ti)-1)*e_k1;
-
-  e_k1 = e_k;
-  a_k1 = a_k;
-  return a_k;
-    
-}
-
+ * Function converting aacceleration to timer ticks
+ */
 float a2N(float T,float a_k, int m){
   
   // zastita od namotavanja integratora
@@ -268,6 +254,9 @@ float a2N(float T,float a_k, int m){
   
   return N;
 }
+/**
+ * Function converting timer ticks to speed
+ */
 float N2speed(float N){
   
   // vrijeme između koraka
@@ -280,19 +269,20 @@ float N2speed(float N){
 
 /**
  *
- * Funkcija koja ostvaruje LQR regulator
+ * Function implementing LQR controller
  *
- * @param  (float) T - vrijeme uzorkovanja
- * @param  (float) inoput - nagib segway-a
- * @param  (float) setPoint - referenca nagiba
- * @param  (float) Kp, Ti, Td - Koeficienti PID regulatoar
+ * @param  (float) T - samplig time
+ * @param  (float) inoput - gibalo angle
+ * @param  (float) setPoint - setpoint angle
+ * @param  (float) flag - ginalo state ON/OFF - anti-windup
  *
- * @return (float) N - skalirana upravljačka veličina
+ * @return (float) acceleration
  */
 float angleLQRControl(float T, float input, float setPoint,int flag )
 {
 
-  if(flag){
+  // if gibalo state is OFF do nothing
+  if(flag == OFF){
     w[MR][k - 1] = 0;
     d_x[k-1] = 0;
     d_x[k-2] = 0;
@@ -301,34 +291,21 @@ float angleLQRControl(float T, float input, float setPoint,int flag )
     theta[k-1] = 0;
     return 0;
   }
-  //LQR konstante
-  // dobar
+  // LQR constants
   float Kr[4] = {31.0325,4.1054,3.698,2.1209};
- /**
-   * Izracun varijabli stanja
-   */
-  // spremanje theta kuta
-  theta[k] = input;
-  // izracun derivacije theta
-  float d_theta = (theta[k] - theta[k-1])/T;
-  // izracun x
-  x[k] = count_xr / 16.0 * pi / 100.0 * R ; // microstepping
-  // izracun x derivacije
-  dx[k] = w[MR][k] * R ;
-    //   Tustin filtar a - time constant
-  //d_x[k] = 1/(2*Ta+T)*((2*Ta-T)*d_x[k-1]+T*(dx[k]-dx[k-1]));  
-  //d_x[k] =  0.2*w[k] * R * 1.3  +  0.4*(x[k]-x[k-1])/T + 0.2*d_x[k-1] + 0.2*d_x[k-2];
-  d_x[k] = w[MR][k] * R;
   
-  /**
-   * LQR algoritam
-   */
-  // izracunavanje akceleracije kao urpavljačke veličine
-  float a_k = Kr[0]*theta[k] + Kr[1]* d_theta + Kr[3]*x[k] + Kr[2]* d_x[k];
+  // Calculation of state space variables
+  theta[k] = input;
+  // angle derivation
+  float d_theta = (theta[k] - theta[k-1])/T;
+  // linear position estimation
+  x[k] = count_xr / 16.0 * pi / 100.0 * R ; // microstepping
+  // linear velocity 
+  dx[k] = w[MR][k] * R ;
+  
+  // acceleration calculation based on LQR algorithm
+  float a_k = Kr[0]*theta[k] + Kr[1]* d_theta + Kr[3]*x[k] + Kr[2]* dx[k];
  
-  // spremanje varijabli za sljedecu iteraciju
-  d_x[k-1] = d_x[k];
-  d_x[k-2] = d_x[k-1];
   dx[k-1] = dx[k];
   x[k-1] = x[k];
   theta[k-1] = theta[k];
@@ -451,7 +428,6 @@ void calculateSubperiods(uint8_t motor)
 }
 
 
-
 void setMotorSpeed(uint8_t motor, int16_t tspeed)
 {
   // WE LIMIT MAX ACCELERATION
@@ -511,7 +487,6 @@ void setup()
   Serial.println("Initializing I2C devices...");
   //mpu.initialize();
 
-  
   mpu.setClockSource(MPU6050_CLOCK_PLL_ZGYRO);
   mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_2000);
   mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
@@ -575,7 +550,7 @@ void setup()
 
   delay(2000);
 
-  //Adjust sensor fusion gain
+  // Adjust sensor fusion gain
   Serial.println("Adjusting DMP sensor fusion gain...");
   dmpSetSensorFusionAccelGain(0x20);
 
@@ -682,7 +657,7 @@ void loop() {
 *   Function receiving throttle and steering reference
 *   over Bluetooth Serial port
 *
-* Receives byte via Serial/Bluetooth port
+*  Receives byte via Serial/Bluetooth port
 *   and decodes it to throttle and steering reference
 *
 */
