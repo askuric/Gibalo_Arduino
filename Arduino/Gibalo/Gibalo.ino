@@ -7,9 +7,7 @@
 //#define GIBALO_V2_0 // Milneko
 #define GIBALO_V2_1  // Faks
 
-/**
- * The orientation of the accelerometer
- */
+// The orientation of the accelerometer
 #define USE_ROLL  // Faks & Milenko
 //#define USE_PICH 
 
@@ -38,7 +36,7 @@
 #ifdef GIBALO_V2_0
   #define ZERO_ANGLE -1.5
 #elif defined GIBALO_V2_1
-  #define ZERO_ANGLE 4.8 
+  #define ZERO_ANGLE 4.8
 #else
   #define ZERO_ANGLE 0
 #endif
