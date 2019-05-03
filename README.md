@@ -6,4 +6,4 @@
 <p>
 <img src="./Images/solidfront2.3.png" height="300px">
 <img src="./Images/solidtop2.3.png" height="300px">
-<img src="./Imqges/solidside2.3.png" height="300px"></p>
+<img src="./Images/solidside2.3.png" height="300px"></p>
